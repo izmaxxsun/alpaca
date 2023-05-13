@@ -1,8 +1,10 @@
-import pandas as pd
 from alpaca.data import CryptoHistoricalDataClient, StockHistoricalDataClient
-from alpaca.data.requests import StockLatestBarRequest, StockBarsRequest
+from alpaca.data.requests import StockLatestBarRequest, StockBarsRequest, StockSnapshotRequest
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
+import pandas as pd
+import plotly.graph_objects as go
+import numpy as np
 
 API_KEY = 'AK1CA7CG5MJXIK4WTBBP'
 SECRET_KEY = 'AaVB3kFzvnujNwHepEfZRcoOQkHakXGBRPzAtCBM'
@@ -36,9 +38,6 @@ def summarize_market_open(bars_df):
         else:
             bull_count += 1
 
-    #print(f"Bull count: {bull_count}")
-    #print(f"Bear count: {bear_count}")
-
     if delta_price > 0:
         # Bullish
         if bull_count > bear_count:
@@ -54,8 +53,20 @@ def summarize_market_open(bars_df):
 
     return sentiment, delta_price, bull_count, bear_count
 
+def get_stock_snapshot(symbol):
+    """ Retrieves previous daily candle
 
-def get_stock_bars(symbol, start_date, end_date):
+    :param symbol:
+    :return:
+    """
+
+    request_params = StockSnapshotRequest(symbol_or_symbols=[symbol])
+    snapshot = stock_client.get_stock_snapshot(request_params)
+    return snapshot
+
+
+
+def get_stock_bars(symbol, start_date, end_date, time_frame=TimeFrame.Minute):
     """ Retrieves candle information for a given stock
 
     :param symbol: Ticker for stock
@@ -64,7 +75,7 @@ def get_stock_bars(symbol, start_date, end_date):
     :return: Data frame containing candles
     """
     request_params = StockBarsRequest(symbol_or_symbols=[symbol],
-                                      timeframe=TimeFrame.Minute,
+                                      timeframe=time_frame,
                                       start=start_date,
                                       end=end_date)
     am_bar = stock_client.get_stock_bars(request_params)
@@ -116,11 +127,74 @@ def get_premarket_summary(symbol:str, date:datetime):
     print(pm_bars.close.max())
 
 
-def get_previous_day_close(symbol:str, date:datetime):
-    pass
+def get_previous_day_close(symbol: str, date: datetime):
+    # TODO: Complete
+    """ Gets previous day close
 
+    :param symbol: ticker symbol
+    :param date: The current day
+    :return:
+    """
+    #get_stock_bars(symbol, )
+    df = get_stock_bars(symbol, date, date + timedelta(days=1), TimeFrame.Day)
+    print(df)
 
-def calculate_central_pivot_range():
+def calculate_central_pivot_range(symbol: str, date: datetime):
+    # TODO: Complete
     #https://tradingtuitions.com/all-you-wanted-to-know-about-central-pivot-range-cpr-indicator/
+    # TC = (Pivot – BC) + Pivot
+    # Pivot = (High + Low + Close) / 3
+    # BC = (High + Low) / 2
     pass
 
+def get_market_open_probability(ticker, lookback_days):
+    # Create dataframe
+    agg_data_df = pd.DataFrame(columns=['Timestamp', 'Sentiment', 'Delta', 'Bull', 'Bear'])
+
+    # Loop over TBD number of days
+    day_list = get_last_x_weekdays(15)
+    day_list.pop(0)
+
+    for day in day_list:
+        morning_time_start = day.replace(hour=13, minute=30, second=0, microsecond=0)
+        morning_time_end = day.replace(hour=14, minute=0, second=0, microsecond=0)
+
+        df = get_stock_bars(ticker, morning_time_start, morning_time_end)
+        sentiment, delta_price, bull_count, bear_count = summarize_market_open(df)
+        day_name = day.strftime('%A')
+
+        print(
+            f"{day_name}({day}) was a {sentiment} with delta of {delta_price:.2f} and {bull_count} :: {bear_count} bullish to bearish candle ratio")
+
+        agg_data_df = agg_data_df.append(
+            {'Timestamp': day, 'Sentiment': sentiment, 'Delta': delta_price, 'Bull': bull_count, 'Bear': bear_count},
+            ignore_index=True)
+
+    print(agg_data_df)
+    agg_data_df["Color"] = np.where(agg_data_df["Delta"] < 0, 'red', 'green')
+
+    red_count = len(agg_data_df[agg_data_df['Color'] == 'red'])
+    green_count = len(agg_data_df[agg_data_df['Color'] == 'green'])
+    probability_opening_perk = green_count / (red_count + green_count)
+    delta_avg = agg_data_df.loc[agg_data_df['Delta'] > 0, 'Delta'].mean()
+
+    print(f"Probability of market open perk: {probability_opening_perk:.2%} with avg delta of ${delta_avg:.2f}")
+
+
+    fig = go.Figure(data=[go.Bar(
+        x=agg_data_df.Timestamp, y=agg_data_df.Delta,
+        text=agg_data_df.Sentiment,
+        marker_color=agg_data_df.Color,
+        textposition='auto',
+    )])
+
+    fig.show()
+
+    # Plot
+    fig2 = go.Figure(data=[
+        go.Bar(name='Bull', x=agg_data_df.Timestamp, y=agg_data_df.Bull, marker = dict(color='Green')),
+        go.Bar(name='Bear', x=agg_data_df.Timestamp, y=agg_data_df.Bear, marker = dict(color='Red'))
+    ])
+    # Change the bar mode
+    fig2.update_layout(barmode='stack')
+    fig2.show()
